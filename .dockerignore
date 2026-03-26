@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv/
+.issues/
+.runtime/
+__pycache__/
+*.py[co]
+*.session
+*.session-journal
+config.json
+.env
+data/
+build/
+dist/

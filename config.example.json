@@ -1,0 +1,90 @@
+{
+  "api_id": 12345678,
+  "api_hash": "replace_with_your_api_hash",
+  "phone": "+8613800000000",
+  "session_name": "gpt_bot_session",
+  "bot_username": "@your_bot_username",
+  "history_limit": 20,
+  "proxy": {
+    "enabled": false,
+    "proxy_type": "socks5",
+    "addr": "127.0.0.1",
+    "port": 7890,
+    "username": "",
+    "password": "",
+    "rdns": true
+  },
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "api_key": "replace_with_your_api_key",
+    "queue_max_size": 10
+  },
+  "workflow": {
+    "prompt_timeout_seconds": 60,
+    "result_timeout_seconds": 180,
+    "return_delay_seconds": 1,
+    "back_text": "⬅️ 返回",
+    "buttons": {
+      "activate_plus": "⚡️ 激活plus母号",
+      "activate_team": "👥 激活team母号",
+      "balance": "💰 查余额",
+      "redeem": "🎟 兑换卡密"
+    },
+    "prompts": {
+      "access_token": [
+        "请发送 accessToken",
+        "请发送 accessToken 或付款链接"
+      ],
+      "redeem_code": [
+        "请发送卡密"
+      ]
+    },
+    "result_keywords": {
+      "activation_progress": [
+        "已收到请求",
+        "正在处理",
+        "处理中",
+        "请稍候",
+        "请等待"
+      ],
+      "activation_cancelled": [
+        "已取消"
+      ],
+      "activation_success": [
+        "升级成功"
+      ],
+      "activation_failure": [
+        "Token 无效或已过期",
+        "Token 无效",
+        "额度已退回"
+      ],
+      "balance": [
+        "余额：",
+        "余额:"
+      ],
+      "redeem_progress": [
+        "已收到请求",
+        "正在处理",
+        "处理中",
+        "请稍候",
+        "请等待"
+      ],
+      "redeem_cancelled": [
+        "已取消"
+      ],
+      "redeem_success": [
+        "充值成功"
+      ],
+      "redeem_failure": [
+        "你当前余额不少于 3 次",
+        "暂不符合公共卡密领取条件",
+        "充值码无效"
+      ]
+    }
+  },
+  "daemon": {
+    "pid_file": ".runtime/gpt-bot.pid",
+    "log_file": ".runtime/gpt-bot.log"
+  }
+}

@@ -1,0 +1,14 @@
+services:
+  gpt-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gpt-bot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      GPT_BOT_API_KEY: ${GPT_BOT_API_KEY:-}
+    volumes:
+      - ./data:/data
+    command: ["serve", "--config", "/data/config.json", "--non-interactive", "--host", "0.0.0.0"]

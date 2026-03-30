@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+from datetime import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "port": 8000,
         "api_key": "",
         "queue_max_size": 10,
+    },
+    "scheduled_redeem": {
+        "enabled": False,
+        "card_code": "",
+        "times": [
+            "00:00",
+            "00:05",
+        ],
     },
     "workflow": {
         "prompt_timeout_seconds": 60,
@@ -88,11 +97,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
             ],
             "redeem_success": [
                 "充值成功",
+                "充值完成",
             ],
             "redeem_failure": [
                 "你当前余额不少于 3 次",
                 "暂不符合公共卡密领取条件",
                 "充值码无效",
+                "今天的公共卡密名额已领完",
+                "公共卡密今日剩余兑换次数：0",
+                "公共卡密今日剩余兑换次数:0",
             ],
         },
     },
@@ -157,6 +170,41 @@ def validate_api_runtime_config(config: dict[str, Any]) -> None:
     port = int(api_config.get("port", 0))
     if port <= 0 or port > 65535:
         raise ValueError("api.port 必须是有效端口号。")
+
+    scheduled_redeem_config = config.get("scheduled_redeem", {})
+    if scheduled_redeem_config and not isinstance(scheduled_redeem_config, dict):
+        raise ValueError("scheduled_redeem 必须是对象。")
+
+    if not bool(scheduled_redeem_config.get("enabled", False)):
+        return
+
+    card_code = str(scheduled_redeem_config.get("card_code", "")).strip()
+    if not card_code:
+        raise ValueError("启用 scheduled_redeem 时，scheduled_redeem.card_code 不能为空。")
+
+    _validate_daily_schedule_times(
+        raw_times=scheduled_redeem_config.get("times", []),
+        config_key="scheduled_redeem.times",
+    )
+
+
+def _validate_daily_schedule_times(raw_times: Any, config_key: str) -> None:
+    """校验每日定时配置使用 `HH:MM` 格式，避免后台调度在运行时失败。AI by zb"""
+    if not isinstance(raw_times, list) or not raw_times:
+        raise ValueError(f"{config_key} 必须是至少包含一个 `HH:MM` 字符串的数组。")
+
+    for raw_time in raw_times:
+        time_text = str(raw_time).strip()
+        if not time_text:
+            raise ValueError(f"{config_key} 中存在空时间配置。")
+
+        try:
+            parsed_time = time.fromisoformat(time_text)
+        except ValueError as exc:
+            raise ValueError(f"{config_key} 中的时间 `{time_text}` 不是有效的 `HH:MM` 格式。") from exc
+
+        if parsed_time.second or parsed_time.microsecond:
+            raise ValueError(f"{config_key} 中的时间 `{time_text}` 只能精确到分钟。")
 
 
 def get_daemon_paths(config: dict[str, Any], config_path: Path) -> tuple[Path, Path]:

@@ -102,6 +102,10 @@ class TelegramBotService:
         LOGGER.info("已发送消息: %s", text)
         return message
 
+    async def send_back(self, back_text: str) -> None:
+        """立即向机器人发送返回消息，供外部取消接口直接调用。AI by zb"""
+        await self.click_button_or_send_text(back_text)
+
     async def wait_for_keywords(
         self,
         keywords: Iterable[str],
@@ -157,7 +161,7 @@ class TelegramBotService:
         try:
             if delay_seconds > 0:
                 await asyncio.sleep(delay_seconds)
-            await self.click_button_or_send_text(back_text)
+            await self.send_back(back_text)
         except Exception as exc:  # pragma: no cover - 清理路径只做日志兜底
             LOGGER.warning("发送返回消息失败: %s", exc)
 

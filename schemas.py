@@ -35,6 +35,17 @@ class WorkflowResponse(BaseModel):
     queued_at: str = Field(..., alias="queuedAt")
 
 
+class CancelResponse(BaseModel):
+    """定义取消接口的返回结构，明确告知外部是否已发送返回消息。AI by zb"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: str
+    success: bool
+    message: str
+    sent_text: str = Field(..., alias="sentText")
+
+
 class ServiceStatusResponse(BaseModel):
     """定义服务状态接口的返回结构，暴露连接状态与排队情况。AI by zb"""
 

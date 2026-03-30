@@ -123,15 +123,6 @@ class BotWorkflowService:
         )
 
     @property
-    def _redeem_terminal_keywords(self) -> list[str]:
-        """返回兑换流程完成时允许命中的全部终态关键词。AI by zb"""
-        return (
-            list(self._result_keywords["redeem_success"])
-            + list(self._result_keywords["redeem_failure"])
-            + list(self._result_keywords.get("redeem_cancelled", []))
-        )
-
-    @property
     def _activation_progress_keywords(self) -> list[str]:
         """返回激活流程中间态关键词，用于识别处理中提示。AI by zb"""
         return list(self._result_keywords.get("activation_progress", []))
@@ -302,11 +293,7 @@ class BotWorkflowService:
 
     def _build_redeem_result(self, raw_message: str) -> WorkflowResult:
         """根据机器人返回文本构建兑换流程的结构化结果。AI by zb"""
-        success_keywords = list(self._result_keywords["redeem_success"])
-        failure_keywords = list(self._result_keywords["redeem_failure"])
-        cancelled_keywords = list(self._result_keywords.get("redeem_cancelled", []))
-
-        if match_keywords(raw_message, success_keywords):
+        if self._is_redeem_success_message(raw_message):
             return WorkflowResult(
                 action="redeem",
                 success=True,
@@ -315,49 +302,20 @@ class BotWorkflowService:
                 raw_message=raw_message,
             )
 
-        if match_keywords(raw_message, ["你当前余额不少于 3 次", "暂不符合公共卡密领取条件"]):
-            return WorkflowResult(
-                action="redeem",
-                success=False,
-                status="not_eligible",
-                message=raw_message,
-                raw_message=raw_message,
-            )
-
-        if match_keywords(raw_message, ["充值码无效"]):
-            return WorkflowResult(
-                action="redeem",
-                success=False,
-                status="invalid_card_code",
-                message=raw_message,
-                raw_message=raw_message,
-            )
-
-        if match_keywords(raw_message, cancelled_keywords):
-            return WorkflowResult(
-                action="redeem",
-                success=False,
-                status="cancelled",
-                message=raw_message,
-                raw_message=raw_message,
-            )
-
-        if match_keywords(raw_message, failure_keywords):
-            return WorkflowResult(
-                action="redeem",
-                success=False,
-                status="failed",
-                message=raw_message,
-                raw_message=raw_message,
-            )
-
         return WorkflowResult(
             action="redeem",
             success=False,
-            status="unknown",
+            status="failed",
             message=raw_message,
             raw_message=raw_message,
         )
+
+    def _is_redeem_success_message(self, raw_message: str) -> bool:
+        """判断兑换结果是否属于明确成功终态。AI by zb"""
+        if match_keywords(raw_message, list(self._result_keywords["redeem_success"])):
+            return True
+
+        return bool(re.search(r"(充值成功|充值完成|已?增加\s*\d+\s*次)", raw_message))
 
     def _classify_redeem_message(self, action: str, raw_message: str) -> WorkflowResult | str | None:
         """将兑换流程中的任意新消息分类为中间态、成功或失败。AI by zb"""
@@ -368,16 +326,7 @@ class BotWorkflowService:
         if re.search(r"当前状态[：:]", raw_message) or re.search(r"第\s*\d+\s*次查询", raw_message):
             return "progress"
 
-        if match_keywords(raw_message, self._redeem_terminal_keywords):
-            return self._build_redeem_result(raw_message)
-
-        if re.search(r"(充值成功|增加\s*\d+\s*次)", raw_message):
-            return self._build_redeem_result(raw_message)
-
-        if re.search(r"(无效|失败|不符合|重试)", raw_message):
-            return self._build_redeem_result(raw_message)
-
-        return None
+        return self._build_redeem_result(raw_message)
 
     def _extract_balance(self, raw_message: str) -> int | None:
         """尝试从余额结果文本中提取可直接使用的次数值。AI by zb"""

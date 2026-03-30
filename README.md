@@ -1,5 +1,7 @@
 # Telegram 激活与兑换 API 服务
 
+本地启动请优先看 `LOCAL_SETUP.md`。这个文档只讲本地安装、登录、启动和验证，已忽略 Docker。
+
 这个项目基于 Telegram 用户账号会话和 Telethon，把 bot 菜单操作包装成可供外部系统调用的 HTTP API，并支持本地运行、后台运行和 Docker 部署。
 
 当前支持的内部业务动作：
@@ -19,7 +21,9 @@
 - API Key 鉴权
 - 串行队列执行 Telegram 流程，避免并发请求导致对话串台
 - 可配置队列上限，队满后直接拒绝新请求
+- 支持独立取消接口，直接发送 `⬅️ 返回`
 - 支持按 `requestId` 查询任务状态与最终结果
+- 支持每日定时自动兑换固定卡密
 
 ## 目录说明
 
@@ -69,6 +73,12 @@ Copy-Item .\config.example.json .\config.json
   外部调用接口时使用的鉴权密钥
 - `api.queue_max_size`
   最大等待队列长度，当前正在执行的任务不计入这里
+- `scheduled_redeem.enabled`
+  是否启用每日定时兑换任务
+- `scheduled_redeem.card_code`
+  定时兑换时自动提交的固定卡密
+- `scheduled_redeem.times`
+  每日执行时间列表，使用 `HH:MM` 格式，按服务所在机器本地时区计算
 - `workflow.prompt_timeout_seconds`
   等待 bot 返回“请输入 accessToken / 卡密”提示的超时时间
 - `workflow.result_timeout_seconds`
@@ -85,6 +95,24 @@ $env:GPT_BOT_API_KEY = "replace_with_your_api_key"
 ```
 
 当 `config.json` 里的 `api.api_key` 为空时，程序会自动读取 `GPT_BOT_API_KEY`。
+
+### 定时兑换配置示例
+
+```json
+"scheduled_redeem": {
+  "enabled": true,
+  "card_code": "SHARED-1D8286F94F66",
+  "times": [
+    "00:00",
+    "00:05"
+  ]
+}
+```
+
+说明：
+
+- 启用后，服务会在每日指定时间自动执行与 `POST /api/v1/redeem` 等价的兑换工作流
+- 定时任务会复用现有串行队列，因此不会和手动 API 请求并发串台
 
 ## 首次登录
 
@@ -454,7 +482,26 @@ X-API-Key: your_api_key
 5. 自动发送 `⬅️ 返回`
 6. 返回结果给 API 调用方
 
-### 5. 服务状态
+补充说明：
+
+- 若机器人返回“充值成功”、“充值完成”或“已增加 x 次 / 增加 x 次”这类字样，接口会返回成功结果，`status` 为 `success`
+- 除处理中提示外，其余兑换返回一律按失败处理，`status` 为 `failed`
+
+### 5. 取消当前菜单
+
+```http
+POST /api/v1/cancel
+X-API-Key: your_api_key
+```
+
+内部流程：
+
+1. 直接发送 `⬅️ 返回`
+2. 不进入工作流队列
+3. 不等待 bot 返回结果
+4. 立即返回发送结果给 API 调用方
+
+### 6. 服务状态
 
 ```http
 GET /api/v1/status
@@ -469,7 +516,7 @@ X-API-Key: your_api_key
 - 正在执行的请求 ID
 - 正在执行的动作名称
 
-### 6. 按 requestId 查询任务状态
+### 7. 按 requestId 查询任务状态
 
 ```http
 GET /api/v1/requests/{requestId}
@@ -484,7 +531,7 @@ X-API-Key: your_api_key
 - `failed`
 - `cancelled`
 
-### 7. 健康检查
+### 8. 健康检查
 
 ```http
 GET /healthz
@@ -514,6 +561,13 @@ curl "http://127.0.0.1:8000/api/v1/balance" \
 
 ```bash
 curl "http://127.0.0.1:8000/api/v1/requests/your_request_id" \
+  -H "X-API-Key: your_api_key"
+```
+
+### 发送取消
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/cancel" \
   -H "X-API-Key: your_api_key"
 ```
 

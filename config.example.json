@@ -20,6 +20,14 @@
     "api_key": "replace_with_your_api_key",
     "queue_max_size": 10
   },
+  "scheduled_redeem": {
+    "enabled": false,
+    "card_code": "replace_with_your_card_code",
+    "times": [
+      "00:00",
+      "00:05"
+    ]
+  },
   "workflow": {
     "prompt_timeout_seconds": 60,
     "result_timeout_seconds": 180,
@@ -74,12 +82,16 @@
         "已取消"
       ],
       "redeem_success": [
-        "充值成功"
+        "充值成功",
+        "充值完成"
       ],
       "redeem_failure": [
         "你当前余额不少于 3 次",
         "暂不符合公共卡密领取条件",
-        "充值码无效"
+        "充值码无效",
+        "今天的公共卡密名额已领完",
+        "公共卡密今日剩余兑换次数：0",
+        "公共卡密今日剩余兑换次数:0"
       ]
     }
   },

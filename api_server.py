@@ -11,8 +11,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from job_queue import QueueFullError, WorkflowJobQueue
+from scheduled_redeem import ScheduledRedeemService
 from schemas import (
     ActivateRequest,
+    CancelResponse,
     HealthResponse,
     RedeemRequest,
     RequestStatusResponse,
@@ -34,17 +36,25 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         telegram_service = TelegramBotService(config=config, config_path=config_path)
         workflow_service = BotWorkflowService(telegram_service=telegram_service, config=config)
         job_queue = WorkflowJobQueue(queue_limit=int(config["api"]["queue_max_size"]))
+        scheduled_redeem_service = ScheduledRedeemService(
+            config=config,
+            workflow_service=workflow_service,
+            job_queue=job_queue,
+        )
 
         await telegram_service.connect(allow_interactive_auth=allow_interactive_auth)
         await job_queue.start()
+        await scheduled_redeem_service.start()
 
         app.state.config = config
         app.state.telegram_service = telegram_service
         app.state.workflow_service = workflow_service
         app.state.job_queue = job_queue
+        app.state.scheduled_redeem_service = scheduled_redeem_service
         try:
             yield
         finally:
+            await scheduled_redeem_service.stop()
             await job_queue.stop()
             await telegram_service.disconnect()
 
@@ -125,6 +135,18 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
             request=request,
             action="redeem",
             executor=lambda: request.app.state.workflow_service.redeem(payload.card_code),
+        )
+
+    @app.post("/api/v1/cancel", response_model=CancelResponse, dependencies=[Depends(verify_api_key)])
+    async def cancel(request: Request) -> CancelResponse:
+        """对外暴露取消接口，立即向机器人发送返回消息。AI by zb"""
+        back_text = str(request.app.state.config["workflow"]["back_text"])
+        await request.app.state.telegram_service.send_back(back_text)
+        return CancelResponse(
+            action="cancel",
+            success=True,
+            message="已发送返回消息。",
+            sent_text=back_text,
         )
 
     return app

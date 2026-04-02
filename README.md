@@ -423,8 +423,10 @@ X-API-Key: your_api_key
 2. 等待 `请发送 accessToken 或付款链接`
 3. 发送 `accessToken`
 4. 等待处理结果
-5. 自动发送 `⬅️ 返回`
-6. 返回结果给 API 调用方
+5. `POST /api/v1/activate/*` 结束时不立即发送 `⬅️ 返回`
+6. 只要已收到“已收到请求 / 处理中 / 请稍候”等中间态消息，接口就立即返回 `requestId`
+7. 具体激活状态通过 `GET /api/v1/requests/{requestId}` 查询
+8. 当首次查询到该 `requestId` 已进入终态时，服务会触发一次 `⬅️ 返回` 用于把菜单复原
 
 ### 2. 激活 team 母号
 
@@ -443,6 +445,12 @@ X-API-Key: your_api_key
 ```
 
 内部流程与 plus 激活一致，只是入口按钮不同。
+
+补充说明：
+
+- 只要 accessToken 已发送且收到“已收到请求 / 处理中 / 请稍候”等中间态消息，激活接口就立即返回 `success: true`、`status: processing`
+- 除处理中提示外，其余未识别消息一律直接按失败返回，通常表现为 `success: false`、`status: unknown`
+- 具体激活状态请使用返回的 `requestId` 调用 `GET /api/v1/requests/{requestId}` 查询
 
 ### 3. 查询余额
 
@@ -530,6 +538,40 @@ X-API-Key: your_api_key
 - `completed`
 - `failed`
 - `cancelled`
+
+对接建议：
+
+- `POST /api/v1/activate/plus` 和 `POST /api/v1/activate/team` 返回 `success: true`、`status: processing`，只表示机器人已接单并进入处理中，不代表最终激活成功。
+- 调用方应继续使用 `GET /api/v1/requests/{requestId}` 轮询最终结果。
+- 当首次查询到终态 `requestId` 时，服务会顺带触发一次 `⬅️ 返回` 复原菜单；同一个 `requestId` 只触发一次。
+- 当 `GET /api/v1/requests/{requestId}` 的 `state` 仍为 `queued` 或 `running` 时，`success` 会返回 `null`，不要把它当成最终成功。
+- 最终成功建议按 `state=completed && success=true && status=success` 判断。
+- 最终失败建议按 `state=completed && success=false`，或 `state=failed`，或 `state=cancelled` 判断。
+
+当前生效的激活文案判定：
+
+- 中间态文案：
+  - `已收到请求`
+  - `正在生成`
+  - `生成支付链接`
+  - `正在处理`
+  - `处理中`
+  - `当前状态`
+  - `次查询`
+  - `请稍候`
+  - `请等待`
+  - 以及匹配 `当前状态：...`、`第 n 次查询` 的文本
+- 成功文案：
+  - 配置关键词：`升级成功`
+  - 代码兜底：包含 `成功`、`已升级`、`升级完成`，且不包含 `请求`
+- 失败文案：
+  - 配置关键词：`Token 无效或已过期`、`Token 无效`、`额度已退回`
+  - 代码兜底：包含 `无效`、`过期`、`退回`、`失败`、`重试`、`重新获取`
+- 取消文案：
+  - `已取消`
+- 未识别文案：
+  - 直接按失败处理，通常表现为 `success=false`、`status=unknown`
+  - 示例：`余额不足。可点击 ⭐ 获取额度 进行充值，或联系 @Pehlicg 获取充值码。`
 
 ### 8. 健康检查
 

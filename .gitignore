@@ -16,3 +16,4 @@ wheels/
 config.json
 *.session
 *.session-journal
+config.hl.json

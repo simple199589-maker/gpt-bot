@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from job_queue import QueueFullError, WorkflowJobQueue
+from job_queue import QueueFullError, QueueJob, WorkflowJobQueue
 from scheduled_redeem import ScheduledRedeemService
 from schemas import (
     ActivateRequest,
@@ -26,6 +26,7 @@ from workflow_service import BotWorkflowService, WorkflowError, WorkflowResult
 
 
 LOGGER = logging.getLogger("telegram_button_automation.api")
+ACTIVATION_ACTIONS = {"activate_plus", "activate_team"}
 
 
 def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth: bool) -> FastAPI:
@@ -99,6 +100,7 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         if job is None:
             raise HTTPException(status_code=404, detail="未找到对应的 requestId。")
 
+        await _restore_activation_menu_if_needed(request=request, job=job)
         return _build_request_status_response(job)
 
     @app.post("/api/v1/activate/plus", response_model=WorkflowResponse, dependencies=[Depends(verify_api_key)])
@@ -107,7 +109,10 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         return await _run_workflow(
             request=request,
             action="activate_plus",
-            executor=lambda: request.app.state.workflow_service.activate_plus(payload.access_token),
+            executor=lambda progress_callback=None: request.app.state.workflow_service.activate_plus(
+                payload.access_token,
+                progress_callback=progress_callback,
+            ),
         )
 
     @app.post("/api/v1/activate/team", response_model=WorkflowResponse, dependencies=[Depends(verify_api_key)])
@@ -116,7 +121,10 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         return await _run_workflow(
             request=request,
             action="activate_team",
-            executor=lambda: request.app.state.workflow_service.activate_team(payload.access_token),
+            executor=lambda progress_callback=None: request.app.state.workflow_service.activate_team(
+                payload.access_token,
+                progress_callback=progress_callback,
+            ),
         )
 
     @app.get("/api/v1/balance", response_model=WorkflowResponse, dependencies=[Depends(verify_api_key)])
@@ -125,7 +133,7 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         return await _run_workflow(
             request=request,
             action="query_balance",
-            executor=lambda: request.app.state.workflow_service.query_balance(),
+            executor=lambda progress_callback=None: request.app.state.workflow_service.query_balance(),
         )
 
     @app.post("/api/v1/redeem", response_model=WorkflowResponse, dependencies=[Depends(verify_api_key)])
@@ -134,7 +142,7 @@ def create_app(config: dict[str, Any], config_path: Path, allow_interactive_auth
         return await _run_workflow(
             request=request,
             action="redeem",
-            executor=lambda: request.app.state.workflow_service.redeem(payload.card_code),
+            executor=lambda progress_callback=None: request.app.state.workflow_service.redeem(payload.card_code),
         )
 
     @app.post("/api/v1/cancel", response_model=CancelResponse, dependencies=[Depends(verify_api_key)])
@@ -171,17 +179,31 @@ def _extract_api_key(x_api_key: str | None, authorization: str | None) -> str:
 async def _run_workflow(
     request: Request,
     action: str,
-    executor: Callable[[], Awaitable[WorkflowResult]],
+    executor: Callable[[Callable[[WorkflowResult], Awaitable[None]] | None], Awaitable[WorkflowResult]],
 ) -> WorkflowResponse | Response:
     """把业务执行请求提交到串行队列，并把结果转换为统一响应模型。AI by zb"""
     job_queue: WorkflowJobQueue = request.app.state.job_queue
-    job = None
+    job: QueueJob | None = None
+
+    async def publish_progress(progress_result: WorkflowResult) -> None:
+        """把激活流程中间态发布给等待中的 HTTP 请求，并同步到 requestId 状态。AI by zb"""
+        if job is None:
+            return
+        await job_queue.publish_response(job, progress_result)
+
     try:
-        job = await job_queue.submit(action=action, executor=executor)
+        job = await job_queue.submit(
+            action=action,
+            executor=lambda: executor(publish_progress if action in ACTIVATION_ACTIONS else None),
+        )
         LOGGER.info("请求已入队: action=%s request_id=%s", action, job.request_id)
-        result = await job_queue.wait_result(job)
+        result = (
+            await job_queue.wait_response(job)
+            if action in ACTIVATION_ACTIONS
+            else await job_queue.wait_result(job)
+        )
     except asyncio.CancelledError:
-        if job is not None and (job.future.cancelled() or job.state == "cancelled"):
+        if job is not None and ((job.response_future.cancelled() if action in ACTIVATION_ACTIONS else job.future.cancelled()) or job.state == "cancelled"):
             LOGGER.info("请求在服务关闭期间被取消: action=%s request_id=%s", action, job.request_id)
             return JSONResponse(
                 status_code=503,
@@ -210,6 +232,24 @@ async def _run_workflow(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc) or "工作流执行失败。") from exc
 
+    return _build_workflow_response(job=job, result=result)
+
+
+def _build_workflow_response(job, result: WorkflowResult) -> WorkflowResponse:
+    """根据动作类型构建统一响应；激活接口命中处理中消息时立即返回 processing。AI by zb"""
+    if result.action in ACTIVATION_ACTIONS and result.status == "processing":
+        return WorkflowResponse(
+            request_id=job.request_id,
+            action=result.action,
+            success=True,
+            status="processing",
+            message=result.message,
+            raw_message=result.raw_message,
+            balance=result.balance,
+            queue_position=job.queue_position,
+            queued_at=job.queued_at.isoformat(),
+        )
+
     return WorkflowResponse(
         request_id=job.request_id,
         action=result.action,
@@ -226,6 +266,9 @@ async def _run_workflow(
 def _build_request_status_response(job) -> RequestStatusResponse:
     """把队列中的任务对象转换为可直接返回给调用方的状态模型。AI by zb"""
     result = job.result if isinstance(job.result, WorkflowResult) else None
+    if result is None and isinstance(job.response_result, WorkflowResult):
+        result = job.response_result
+    is_terminal_state = str(job.state or "").strip().lower() in {"completed", "failed", "cancelled"}
     return RequestStatusResponse(
         request_id=job.request_id,
         action=job.action,
@@ -234,7 +277,7 @@ def _build_request_status_response(job) -> RequestStatusResponse:
         queued_at=job.queued_at.isoformat(),
         started_at=job.started_at.isoformat() if job.started_at else None,
         finished_at=job.finished_at.isoformat() if job.finished_at else None,
-        success=result.success if result else None,
+        success=result.success if result and is_terminal_state else None,
         status=result.status if result else None,
         message=result.message if result else None,
         raw_message=result.raw_message if result else None,
@@ -242,3 +285,30 @@ def _build_request_status_response(job) -> RequestStatusResponse:
         error_message=job.error_message,
         error_type=job.error_type,
     )
+
+
+async def _restore_activation_menu_if_needed(request: Request, job: QueueJob) -> None:
+    """当激活任务进入终态且调用方查询状态时，按需触发一次菜单复原。AI by zb"""
+    normalized_state = str(job.state or "").strip().lower()
+    if job.action not in ACTIVATION_ACTIONS:
+        return
+    if normalized_state not in {"completed", "failed", "cancelled"}:
+        return
+
+    job_queue: WorkflowJobQueue = request.app.state.job_queue
+    claimed = await job_queue.claim_menu_restore(job.request_id)
+    if not claimed:
+        return
+
+    back_text = str(request.app.state.config["workflow"]["back_text"])
+    delay_seconds = float(request.app.state.config["workflow"]["return_delay_seconds"])
+    sent = False
+    try:
+        await request.app.state.telegram_service.safe_send_back(
+            back_text=back_text,
+            delay_seconds=delay_seconds,
+        )
+        sent = True
+        LOGGER.info("request_status 触发菜单复原成功: action=%s request_id=%s", job.action, job.request_id)
+    finally:
+        await job_queue.finish_menu_restore(job.request_id, sent=sent)

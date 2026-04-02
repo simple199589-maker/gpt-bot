@@ -1,103 +1,172 @@
-# API 简洁文档
+# API 对接简版
 
-本文档基于项目 `README.md` 整理，并已对照线上 `OpenAPI` 入口 `https://bot.joini.cloud/openapi.json` 校验。
+适用项目：`gpt-bot`
+
+这份文档只保留调用方对接时必须知道的内容：怎么调用、怎么轮询、怎么判成功失败。
 
 ## 基础信息
 
 - Host：`https://bot.joini.cloud`
-- 内容类型：`application/json`
-- 鉴权方式：
+- Content-Type：`application/json`
+- 鉴权：
   - `X-API-Key: your_api_key`
-  - `Authorization: Bearer your_api_key`
+  - 或 `Authorization: Bearer your_api_key`
 - 免鉴权接口：
   - `GET /healthz`
 
-## 通用说明
+## 对接流程
 
-- 业务接口会进入串行队列执行，避免 Telegram 会话串台。
-- 当等待队列已满时，服务会返回 `429`。
-- 如果客户端请求超时或断开，可继续通过任务状态接口轮询最终结果。
+激活 `plus` / `team` 的标准流程：
 
-## 通用响应结构
+1. 调用 `POST /api/v1/activate/plus` 或 `POST /api/v1/activate/team`
+2. 如果接口返回 `success: true` 且 `status: processing`，表示机器人已接单，任务进入处理中
+3. 记录返回的 `requestId`
+4. 继续调用 `GET /api/v1/requests/{request_id}` 轮询最终结果
+5. 按任务查询结果判断成功或失败
 
-### WorkflowResponse
+关键点：
 
-适用于：
+- 激活接口返回 `processing` 不代表最终成功
+- 最终结果只以 `GET /api/v1/requests/{request_id}` 为准
+- 激活流程不会在 `POST /api/v1/activate/*` 结束时立即复原菜单
+- 当调用 `GET /api/v1/requests/{request_id}` 且任务已进入终态时，服务会触发一次 `⬅️ 返回`，用于把 bot 菜单复原
+- 这个返回动作按 `requestId` 只会触发一次
 
-- `POST /api/v1/activate/plus`
-- `POST /api/v1/activate/team`
-- `GET /api/v1/balance`
-- `POST /api/v1/redeem`
+## 状态判定
 
-核心字段：
+`GET /api/v1/requests/{request_id}` 的核心字段：
 
-- `requestId`：请求 ID
-- `action`：动作名称
-- `success`：是否成功
-- `status`：结果状态
-- `message`：摘要消息
-- `rawMessage`：原始返回文本
-- `balance`：余额，部分接口可能返回
-- `queuePosition`：进入队列时的位置
-- `queuedAt`：排队时间
+- `state`
+- `success`
+- `status`
+- `message`
+- `rawMessage`
+- `errorMessage`
+- `errorType`
 
-### RequestStatusResponse
+调用方建议按下面规则判断：
 
-适用于：
+| 场景 | 判定条件 | 说明 |
+| --- | --- | --- |
+| 继续轮询 | `state = queued` 或 `state = running` | 任务还没结束 |
+| 最终成功 | `state = completed` 且 `success = true` 且 `status = success` | 激活已成功 |
+| 最终失败 | `state = completed` 且 `success = false` | 任务已结束，但业务结果失败 |
+| 最终失败 | `state = failed` | 服务执行失败 |
+| 最终失败 | `state = cancelled` | 任务已取消 |
 
-- `GET /api/v1/requests/{request_id}`
+补充口径：
 
-核心字段：
+- 当 `state` 是 `queued` 或 `running` 时，`success` 会返回 `null`
+- 处理中阶段请主要看 `state/status/message`
+- `completed` 只表示任务执行结束，不代表一定成功
 
-- `requestId`：请求 ID
-- `action`：动作名称
-- `state`：任务状态，常见值为 `queued`、`running`、`completed`、`failed`、`cancelled`
-- `queuePosition`：当前排队位置
-- `queuedAt`：入队时间
-- `startedAt`：开始时间
-- `finishedAt`：结束时间
-- `success`：是否成功
-- `status`：结果状态
-- `message`：摘要消息
-- `rawMessage`：原始返回文本
-- `balance`：余额
-- `errorMessage`：错误消息
-- `errorType`：错误类型
+## 激活文案判定
 
-### ServiceStatusResponse
+当前激活流程按下面文案分类：
 
-适用于：
+### 中间态文案
 
-- `GET /api/v1/status`
+命中后会让激活接口立即返回：
 
-核心字段：
+- `已收到请求`
+- `正在生成`
+- `生成支付链接`
+- `正在处理`
+- `处理中`
+- `当前状态`
+- `次查询`
+- `请稍候`
+- `请等待`
+- 以及匹配：
+  - `当前状态：...`
+  - `第 n 次查询`
 
-- `connectedToTelegram`：是否已连接 Telegram
-- `queueSize`：当前队列长度
-- `queueLimit`：队列上限
-- `activeAction`：当前执行中的动作
-- `activeRequestId`：当前执行中的请求 ID
+对应表现：
 
-### CancelResponse
+- `POST /api/v1/activate/*`
+  - `success = true`
+  - `status = processing`
+- `GET /api/v1/requests/{request_id}` 轮询中
+  - `state = queued` 或 `running`
+  - `success = null`
 
-适用于：
+### 成功文案
 
-- `POST /api/v1/cancel`
+命中后最终会落成：
 
-核心字段：
+- `state = completed`
+- `success = true`
+- `status = success`
 
-- `action`：固定为 `cancel`
-- `success`：是否发送成功
-- `message`：摘要消息
-- `sentText`：实际发送给机器人的文本
+当前成功文案：
 
-## 接口列表
+- 配置关键词：
+  - `升级成功`
+  - `激活成功`
+  - `已升级`
+  - `升级完成`
+- 代码兜底：
+  - 文案包含 `成功`
+  - 或包含 `已升级`
+  - 或包含 `升级完成`
+  - 但文案里不能包含 `请求`
 
-### 1. 激活 Plus 母号
+### 失败文案
+
+命中后最终会落成：
+
+- `state = completed`
+- `success = false`
+- `status = invalid_access_token`
+
+当前失败文案：
+
+- 配置关键词：
+  - `Token 无效或已过期`
+  - `Token 无效`
+  - `额度已退回`
+  - `重新获取后再试`
+  - `激活失败`
+- 代码兜底：
+  - 文案包含 `无效`
+  - `过期`
+  - `退回`
+  - `失败`
+  - `重试`
+  - `重新获取`
+
+### 取消文案
+
+命中后最终会落成：
+
+- `state = completed`
+- `success = false`
+- `status = cancelled`
+
+当前取消文案：
+
+- `已取消`
+
+### 未识别文案
+
+只要不是中间态，也不匹配成功、失败、取消，就直接按失败处理。
+
+对应表现：
+
+- `state = completed`
+- `success = false`
+- `status = unknown`
+
+示例：
+
+- `余额不足。可点击 ⭐ 获取额度 进行充值，或联系 @Pehlicg 获取充值码。`
+
+## 接口清单
+
+### 1. 激活 Plus
 
 - 方法：`POST`
 - 路径：`/api/v1/activate/plus`
-- 鉴权：需要
 
 请求体：
 
@@ -107,16 +176,15 @@
 }
 ```
 
-说明：
+返回重点：
 
-- 触发 Telegram 菜单：`⚡️ 激活plus母号`
-- 返回结构：`WorkflowResponse`
+- 处理中时：`success=true, status=processing`
+- 最终结果请继续查 `requestId`
 
-### 2. 激活 Team 母号
+### 2. 激活 Team
 
 - 方法：`POST`
 - 路径：`/api/v1/activate/team`
-- 鉴权：需要
 
 请求体：
 
@@ -126,27 +194,24 @@
 }
 ```
 
-说明：
+返回口径与 Plus 相同。
 
-- 触发 Telegram 菜单：`👥 激活team母号`
-- 返回结构：`WorkflowResponse`
+### 3. 查询任务状态
 
-### 3. 查询余额
+- 方法：`GET`
+- 路径：`/api/v1/requests/{request_id}`
+
+这是激活流程最终判定的唯一依据。
+
+### 4. 查询余额
 
 - 方法：`GET`
 - 路径：`/api/v1/balance`
-- 鉴权：需要
 
-说明：
-
-- 触发 Telegram 菜单：`💰 查余额`
-- 返回结构：`WorkflowResponse`
-
-### 4. 兑换卡密
+### 5. 兑换卡密
 
 - 方法：`POST`
 - 路径：`/api/v1/redeem`
-- 鉴权：需要
 
 请求体：
 
@@ -156,82 +221,52 @@
 }
 ```
 
-说明：
-
-- 触发 Telegram 菜单：`🎟 兑换卡密`
-- 返回结构：`WorkflowResponse`
-- 若机器人返回“充值成功”、“充值完成”或“已增加 x 次 / 增加 x 次”这类字样，接口会返回成功结果，`status` 为 `success`
-- 除处理中提示外，其余兑换返回一律按失败处理，`status` 为 `failed`
-
-### 5. 取消当前菜单
+### 6. 取消当前菜单
 
 - 方法：`POST`
 - 路径：`/api/v1/cancel`
-- 鉴权：需要
 
 说明：
 
-- 直接向 Telegram bot 发送 `⬅️ 返回`
+- 直接发送 `⬅️ 返回`
 - 不进入工作流队列
 - 不等待 bot 返回结果
-- 返回结构：`CancelResponse`
 
-### 6. 服务状态
+### 7. 服务状态
 
 - 方法：`GET`
 - 路径：`/api/v1/status`
-- 鉴权：需要
-
-说明：
-
-- 用于查看 Telegram 连接状态与队列状态
-- 返回结构：`ServiceStatusResponse`
-
-### 7. 查询任务状态
-
-- 方法：`GET`
-- 路径：`/api/v1/requests/{request_id}`
-- 鉴权：需要
-
-路径参数：
-
-- `request_id`：任务请求 ID
-
-说明：
-
-- 用于轮询异步任务执行状态和最终结果
-- 返回结构：`RequestStatusResponse`
 
 ### 8. 健康检查
 
 - 方法：`GET`
 - 路径：`/healthz`
-- 鉴权：不需要
 
-响应体：
+## 最小示例
 
-```json
-{
-  "status": "ok"
-}
-```
-
-## 最小调用示例
-
-### 激活 Plus
+### 激活 Team
 
 ```bash
-curl -X POST "https://bot.joini.cloud/api/v1/activate/plus" \
+curl -X POST "https://bot.joini.cloud/api/v1/activate/team" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your_api_key" \
   -d "{\"accessToken\":\"your_access_token\"}"
 ```
 
-### 查询余额
+处理中响应示例：
 
-```bash
-curl "https://bot.joini.cloud/api/v1/balance" \
-  -H "X-API-Key: your_api_key"
+```json
+{
+  "requestId": "your_request_id",
+  "action": "activate_team",
+  "success": true,
+  "status": "processing",
+  "message": "已收到请求，处理中...",
+  "rawMessage": "已收到请求，处理中...",
+  "balance": null,
+  "queuePosition": 1,
+  "queuedAt": "2026-04-03T00:00:00+08:00"
+}
 ```
 
 ### 查询任务状态
@@ -241,21 +276,51 @@ curl "https://bot.joini.cloud/api/v1/requests/your_request_id" \
   -H "X-API-Key: your_api_key"
 ```
 
-### 发送取消
+成功示例：
 
-```bash
-curl -X POST "https://bot.joini.cloud/api/v1/cancel" \
-  -H "X-API-Key: your_api_key"
+```json
+{
+  "requestId": "your_request_id",
+  "action": "activate_team",
+  "state": "completed",
+  "success": true,
+  "status": "success",
+  "message": "✅ 激活成功",
+  "rawMessage": "✅ 激活成功"
+}
 ```
 
-### 健康检查
+处理中示例：
 
-```bash
-curl "https://bot.joini.cloud/healthz"
+```json
+{
+  "requestId": "your_request_id",
+  "action": "activate_team",
+  "state": "running",
+  "success": null,
+  "status": "processing",
+  "message": "已收到请求，处理中...",
+  "rawMessage": "已收到请求，处理中..."
+}
+```
+
+失败示例：
+
+```json
+{
+  "requestId": "your_request_id",
+  "action": "activate_team",
+  "state": "completed",
+  "success": false,
+  "status": "unknown",
+  "message": "余额不足。可点击 ⭐ 获取额度 进行充值，或联系 @Pehlicg 获取充值码。",
+  "rawMessage": "余额不足。可点击 ⭐ 获取额度 进行充值，或联系 @Pehlicg 获取充值码。"
+}
 ```
 
 ## 备注
 
-- README 中“按 requestId 查询任务状态”是说明性写法，线上实际 OpenAPI 路径参数名为 `request_id`。
-- 若需要完整字段定义，可直接查看 `https://bot.joini.cloud/openapi.json`。
-- 服务端现已支持通过 `scheduled_redeem` 配置在每日指定时刻自动执行一次与 `POST /api/v1/redeem` 等价的兑换工作流，例如 `00:00`、`00:05` 自动提交固定 `cardCode`。
+- 线上 OpenAPI 路径参数名是 `request_id`
+- 如果客户端自己超时或断开，仍可继续用 `requestId` 轮询
+- 队列满时接口会返回 `429`
+- 如需完整字段定义，可直接查看 `https://bot.joini.cloud/openapi.json`

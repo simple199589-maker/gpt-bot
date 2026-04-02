@@ -24,6 +24,7 @@ class QueueJob:
     action: str
     executor: Callable[[], Awaitable[Any]]
     future: asyncio.Future[Any]
+    response_future: asyncio.Future[Any]
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     queued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     queue_position: int | None = 1
@@ -31,8 +32,11 @@ class QueueJob:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     result: Any | None = None
+    response_result: Any | None = None
     error_message: str | None = None
     error_type: str | None = None
+    menu_restore_sent: bool = False
+    menu_restore_in_progress: bool = False
 
 
 class WorkflowJobQueue:
@@ -65,6 +69,8 @@ class WorkflowJobQueue:
                 job = self._jobs.popleft()
                 if not job.future.done():
                     job.future.cancel()
+                if not job.response_future.done():
+                    job.response_future.cancel()
                 job.state = "cancelled"
                 job.error_type = "CancelledError"
                 job.error_message = "服务正在关闭，排队任务已取消。"
@@ -84,10 +90,12 @@ class WorkflowJobQueue:
         """提交一个新的工作流任务，若排队已满则直接拒绝。AI by zb"""
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
+        response_future: asyncio.Future[Any] = loop.create_future()
         job = QueueJob(
             action=action,
             executor=executor,
             future=future,
+            response_future=response_future,
         )
 
         async with self._condition:
@@ -105,6 +113,18 @@ class WorkflowJobQueue:
         """等待指定任务执行完成，并屏蔽外层取消对内部 future 的影响。AI by zb"""
         return await asyncio.shield(job.future)
 
+    async def wait_response(self, job: QueueJob) -> Any:
+        """等待指定任务的首个可返回结果，支持激活流程收到中间态后立即响应。AI by zb"""
+        return await asyncio.shield(job.response_future)
+
+    async def publish_response(self, job: QueueJob, result: Any) -> None:
+        """发布任务的中间态响应，并在首次发布时唤醒等待中的接口调用。AI by zb"""
+        async with self._condition:
+            job.response_result = result
+            if not job.response_future.done():
+                job.response_future.set_result(result)
+            self._condition.notify_all()
+
     async def snapshot(self) -> dict[str, Any]:
         """返回当前队列长度、活动任务和队列上限等状态信息。AI by zb"""
         async with self._condition:
@@ -119,6 +139,28 @@ class WorkflowJobQueue:
         """按请求 ID 查询任务当前状态与执行结果。AI by zb"""
         async with self._condition:
             return self._job_index.get(request_id)
+
+    async def claim_menu_restore(self, request_id: str) -> bool:
+        """为指定任务声明一次菜单复原发送权，避免重复发送。AI by zb"""
+        async with self._condition:
+            job = self._job_index.get(request_id)
+            if job is None:
+                return False
+            if job.menu_restore_sent or job.menu_restore_in_progress:
+                return False
+            job.menu_restore_in_progress = True
+            return True
+
+    async def finish_menu_restore(self, request_id: str, sent: bool) -> None:
+        """结束指定任务的菜单复原发送流程；成功时记为已发送，失败时允许后续重试。AI by zb"""
+        async with self._condition:
+            job = self._job_index.get(request_id)
+            if job is None:
+                return
+            job.menu_restore_in_progress = False
+            if sent:
+                job.menu_restore_sent = True
+            self._condition.notify_all()
 
     async def _worker_loop(self) -> None:
         """持续串行执行队列中的任务，直到服务停止且队列清空。AI by zb"""
@@ -140,8 +182,11 @@ class WorkflowJobQueue:
             try:
                 result = await job.executor()
                 job.result = result
+                job.response_result = result
                 job.state = "completed"
                 job.finished_at = datetime.now(timezone.utc)
+                if not job.response_future.done():
+                    job.response_future.set_result(result)
                 if not job.future.done():
                     job.future.set_result(result)
             except asyncio.CancelledError:
@@ -149,6 +194,8 @@ class WorkflowJobQueue:
                 job.error_message = self._shutdown_message
                 job.state = "cancelled"
                 job.finished_at = datetime.now(timezone.utc)
+                if not job.response_future.done():
+                    job.response_future.cancel()
                 if not job.future.done():
                     job.future.cancel()
                 raise
@@ -157,6 +204,8 @@ class WorkflowJobQueue:
                 job.error_message = str(exc)
                 job.state = "failed"
                 job.finished_at = datetime.now(timezone.utc)
+                if not job.response_future.done():
+                    job.response_future.set_exception(exc)
                 if not job.future.done():
                     job.future.set_exception(exc)
             finally:

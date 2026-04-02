@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app_config import match_keywords
 from telegram_service import TelegramBotService
@@ -49,20 +49,30 @@ class BotWorkflowService:
         self._prompts = self._workflow_config["prompts"]
         self._result_keywords = self._workflow_config["result_keywords"]
 
-    async def activate_plus(self, access_token: str) -> WorkflowResult:
+    async def activate_plus(
+        self,
+        access_token: str,
+        progress_callback: Callable[[WorkflowResult], Awaitable[None]] | None = None,
+    ) -> WorkflowResult:
         """执行 plus 母号激活流程，并返回机器人最终反馈。AI by zb"""
         return await self._run_access_token_workflow(
             action="activate_plus",
             button_text=str(self._buttons["activate_plus"]),
             access_token=access_token,
+            progress_callback=progress_callback,
         )
 
-    async def activate_team(self, access_token: str) -> WorkflowResult:
+    async def activate_team(
+        self,
+        access_token: str,
+        progress_callback: Callable[[WorkflowResult], Awaitable[None]] | None = None,
+    ) -> WorkflowResult:
         """执行 team 母号激活流程，并返回机器人最终反馈。AI by zb"""
         return await self._run_access_token_workflow(
             action="activate_team",
             button_text=str(self._buttons["activate_team"]),
             access_token=access_token,
+            progress_callback=progress_callback,
         )
 
     async def query_balance(self) -> WorkflowResult:
@@ -132,7 +142,13 @@ class BotWorkflowService:
         """返回兑换流程中间态关键词，用于识别处理中提示。AI by zb"""
         return list(self._result_keywords.get("redeem_progress", []))
 
-    async def _run_access_token_workflow(self, action: str, button_text: str, access_token: str) -> WorkflowResult:
+    async def _run_access_token_workflow(
+        self,
+        action: str,
+        button_text: str,
+        access_token: str,
+        progress_callback: Callable[[WorkflowResult], Awaitable[None]] | None = None,
+    ) -> WorkflowResult:
         """执行 accessToken 型流程，适用于 plus 与 team 激活。AI by zb"""
         prompt_event_cursor = await self._telegram_service.get_latest_event_cursor()
         await self._telegram_service.click_button_or_send_text(button_text)
@@ -144,23 +160,18 @@ class BotWorkflowService:
         )
         LOGGER.info("%s 已收到输入提示，准备发送 accessToken。", action)
 
-        try:
-            result_event_cursor = await self._telegram_service.get_latest_event_cursor()
-            await self._telegram_service.send_text(access_token, reply_to_message_id=int(prompt_message.id))
-            result = await self._wait_for_terminal_message(
-                action=action,
-                after_event_cursor=result_event_cursor,
-                description="等待激活结果",
-                timeout_seconds=float(self._workflow_config["result_timeout_seconds"]),
-                classifier=self._classify_activation_message,
-            )
-            LOGGER.info("%s 已收到结果消息。", action)
-            return result
-        finally:
-            await self._telegram_service.safe_send_back(
-                back_text=str(self._workflow_config["back_text"]),
-                delay_seconds=float(self._workflow_config["return_delay_seconds"]),
-            )
+        result_event_cursor = await self._telegram_service.get_latest_event_cursor()
+        await self._telegram_service.send_text(access_token, reply_to_message_id=int(prompt_message.id))
+        result = await self._wait_for_terminal_message(
+            action=action,
+            after_event_cursor=result_event_cursor,
+            description="等待激活结果",
+            timeout_seconds=float(self._workflow_config["result_timeout_seconds"]),
+            classifier=self._classify_activation_message,
+            progress_callback=progress_callback,
+        )
+        LOGGER.info("%s 已收到结果消息。", action)
+        return result
 
     async def _wait_for_keywords(
         self,
@@ -187,6 +198,7 @@ class BotWorkflowService:
         description: str,
         timeout_seconds: float,
         classifier,
+        progress_callback: Callable[[WorkflowResult], Awaitable[None]] | None = None,
     ) -> WorkflowResult:
         """持续消费新消息，忽略中间态提示，直到识别出最终结果。AI by zb"""
         loop = asyncio.get_running_loop()
@@ -227,17 +239,20 @@ class BotWorkflowService:
 
             if result == "progress":
                 LOGGER.info("%s 收到中间态消息: %s", action, raw_message.replace("\n", " | "))
+                if progress_callback is not None:
+                    await progress_callback(
+                        self._build_progress_result(
+                            action=action,
+                            raw_message=raw_message,
+                        )
+                    )
                 continue
 
             LOGGER.info("%s 收到未识别消息，继续等待: %s", action, raw_message.replace("\n", " | "))
 
     def _build_activation_result(self, action: str, raw_message: str) -> WorkflowResult:
         """根据机器人返回文本构建激活流程的结构化结果。AI by zb"""
-        success_keywords = list(self._result_keywords["activation_success"])
-        failure_keywords = list(self._result_keywords["activation_failure"])
-        cancelled_keywords = list(self._result_keywords.get("activation_cancelled", []))
-
-        if match_keywords(raw_message, success_keywords):
+        if self._is_activation_success_message(raw_message):
             return WorkflowResult(
                 action=action,
                 success=True,
@@ -246,7 +261,7 @@ class BotWorkflowService:
                 raw_message=raw_message,
             )
 
-        if match_keywords(raw_message, cancelled_keywords):
+        if match_keywords(raw_message, list(self._result_keywords.get("activation_cancelled", []))):
             return WorkflowResult(
                 action=action,
                 success=False,
@@ -255,7 +270,7 @@ class BotWorkflowService:
                 raw_message=raw_message,
             )
 
-        if match_keywords(raw_message, failure_keywords):
+        if self._is_activation_failure_message(raw_message):
             return WorkflowResult(
                 action=action,
                 success=False,
@@ -272,6 +287,30 @@ class BotWorkflowService:
             raw_message=raw_message,
         )
 
+    def _is_activation_success_message(self, raw_message: str) -> bool:
+        """判断激活结果是否属于明确成功终态。AI by zb"""
+        if match_keywords(raw_message, list(self._result_keywords["activation_success"])):
+            return True
+
+        return bool(re.search(r"(成功|已升级|升级完成)", raw_message) and "请求" not in raw_message)
+
+    def _is_activation_failure_message(self, raw_message: str) -> bool:
+        """判断激活结果是否属于明确失败终态。AI by zb"""
+        if match_keywords(raw_message, list(self._result_keywords["activation_failure"])):
+            return True
+
+        return bool(re.search(r"(无效|过期|退回|失败|重试|重新获取)", raw_message))
+
+    def _build_progress_result(self, action: str, raw_message: str) -> WorkflowResult:
+        """根据处理中提示构建可立即返回给调用方的中间态结果。AI by zb"""
+        return WorkflowResult(
+            action=action,
+            success=True,
+            status="processing",
+            message=raw_message,
+            raw_message=raw_message,
+        )
+
     def _classify_activation_message(self, action: str, raw_message: str) -> WorkflowResult | str | None:
         """将激活流程中的任意新消息分类为中间态、成功或失败。AI by zb"""
         if match_keywords(raw_message, self._activation_progress_keywords):
@@ -283,13 +322,13 @@ class BotWorkflowService:
         if match_keywords(raw_message, self._activation_terminal_keywords):
             return self._build_activation_result(action=action, raw_message=raw_message)
 
-        if re.search(r"(成功|已升级|升级完成)", raw_message) and "请求" not in raw_message:
+        if self._is_activation_success_message(raw_message):
             return self._build_activation_result(action=action, raw_message=raw_message)
 
-        if re.search(r"(无效|过期|退回|失败|重试|重新获取)", raw_message):
+        if self._is_activation_failure_message(raw_message):
             return self._build_activation_result(action=action, raw_message=raw_message)
 
-        return None
+        return self._build_activation_result(action=action, raw_message=raw_message)
 
     def _build_redeem_result(self, raw_message: str) -> WorkflowResult:
         """根据机器人返回文本构建兑换流程的结构化结果。AI by zb"""

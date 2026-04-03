@@ -252,15 +252,6 @@ class BotWorkflowService:
 
     def _build_activation_result(self, action: str, raw_message: str) -> WorkflowResult:
         """根据机器人返回文本构建激活流程的结构化结果。AI by zb"""
-        if self._is_activation_success_message(raw_message):
-            return WorkflowResult(
-                action=action,
-                success=True,
-                status="success",
-                message=raw_message,
-                raw_message=raw_message,
-            )
-
         if match_keywords(raw_message, list(self._result_keywords.get("activation_cancelled", []))):
             return WorkflowResult(
                 action=action,
@@ -279,6 +270,15 @@ class BotWorkflowService:
                 raw_message=raw_message,
             )
 
+        if self._is_activation_success_message(raw_message):
+            return WorkflowResult(
+                action=action,
+                success=True,
+                status="success",
+                message=raw_message,
+                raw_message=raw_message,
+            )
+
         return WorkflowResult(
             action=action,
             success=False,
@@ -289,8 +289,14 @@ class BotWorkflowService:
 
     def _is_activation_success_message(self, raw_message: str) -> bool:
         """判断激活结果是否属于明确成功终态。AI by zb"""
+        if self._is_activation_failure_message(raw_message):
+            return False
+
         if match_keywords(raw_message, list(self._result_keywords["activation_success"])):
             return True
+
+        if re.search(r"(未成功|不成功|未升级)", raw_message):
+            return False
 
         return bool(re.search(r"(成功|已升级|升级完成)", raw_message) and "请求" not in raw_message)
 
@@ -299,7 +305,7 @@ class BotWorkflowService:
         if match_keywords(raw_message, list(self._result_keywords["activation_failure"])):
             return True
 
-        return bool(re.search(r"(无效|过期|退回|失败|重试|重新获取)", raw_message))
+        return bool(re.search(r"(无效|过期|退回|失败|重试|重新获取|未成功|不成功|未升级)", raw_message))
 
     def _build_progress_result(self, action: str, raw_message: str) -> WorkflowResult:
         """根据处理中提示构建可立即返回给调用方的中间态结果。AI by zb"""

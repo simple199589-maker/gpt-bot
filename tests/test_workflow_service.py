@@ -36,3 +36,19 @@ class ActivationClassificationTests(unittest.TestCase):
         self.assertIsInstance(result, WorkflowResult)
         self.assertTrue(result.success)
         self.assertEqual(result.status, "success")
+
+    def test_activation_success_message_with_task_summary_is_success(self) -> None:
+        """确保带任务编号与剩余额度的激活成功文案仍会判定为成功。AI by zb"""
+        result = self._service._classify_activation_message(
+            action="activate_team",
+            raw_message=(
+                "✅ 激活成功\n"
+                "任务 T-1f7cfd16 · 耗时 31.6s\n"
+                "这是第 28764 次成功\n"
+                "剩余 6 点额度"
+            ),
+        )
+
+        self.assertIsInstance(result, WorkflowResult)
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, "success")

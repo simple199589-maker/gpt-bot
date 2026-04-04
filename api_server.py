@@ -241,6 +241,7 @@ def _build_workflow_response(job, result: WorkflowResult) -> WorkflowResponse:
         return WorkflowResponse(
             request_id=job.request_id,
             action=result.action,
+            state=job.state,
             success=True,
             status="processing",
             message=result.message,
@@ -253,6 +254,7 @@ def _build_workflow_response(job, result: WorkflowResult) -> WorkflowResponse:
     return WorkflowResponse(
         request_id=job.request_id,
         action=result.action,
+        state=job.state,
         success=result.success,
         status=result.status,
         message=result.message,

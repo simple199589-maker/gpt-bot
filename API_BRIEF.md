@@ -27,6 +27,7 @@
 关键点：
 
 - 激活接口返回 `processing` 不代表最终成功
+- 激活接口现在也会返回 `state`，处理中通常是 `running`，若首个响应已拿到终态则可能直接是 `completed`
 - 最终结果只以 `GET /api/v1/requests/{request_id}` 为准
 - 激活流程不会在 `POST /api/v1/activate/*` 结束时立即复原菜单
 - 当调用 `GET /api/v1/requests/{request_id}` 且任务已进入终态时，服务会触发一次 `⬅️ 返回`，用于把 bot 菜单复原
@@ -259,6 +260,7 @@ curl -X POST "https://bot.joini.cloud/api/v1/activate/team" \
 {
   "requestId": "your_request_id",
   "action": "activate_team",
+  "state": "running",
   "success": true,
   "status": "processing",
   "message": "已收到请求，处理中...",

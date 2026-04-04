@@ -448,7 +448,8 @@ X-API-Key: your_api_key
 
 补充说明：
 
-- 只要 accessToken 已发送且收到“已收到请求 / 处理中 / 请稍候”等中间态消息，激活接口就立即返回 `success: true`、`status: processing`
+- 只要 accessToken 已发送且收到“已收到请求 / 处理中 / 请稍候”等中间态消息，激活接口就立即返回 `state: running`、`success: true`、`status: processing`
+- 如果首个响应已经拿到终态结果，接口会直接返回对应 `state`，成功场景通常是 `state: completed`
 - 除处理中提示外，其余未识别消息一律直接按失败返回，通常表现为 `success: false`、`status: unknown`
 - 具体激活状态请使用返回的 `requestId` 调用 `GET /api/v1/requests/{requestId}` 查询
 
@@ -541,7 +542,7 @@ X-API-Key: your_api_key
 
 对接建议：
 
-- `POST /api/v1/activate/plus` 和 `POST /api/v1/activate/team` 返回 `success: true`、`status: processing`，只表示机器人已接单并进入处理中，不代表最终激活成功。
+- `POST /api/v1/activate/plus` 和 `POST /api/v1/activate/team` 会返回当前 `state`；若是 `state: running` 且 `status: processing`，只表示机器人已接单并进入处理中，不代表最终激活成功。
 - 调用方应继续使用 `GET /api/v1/requests/{requestId}` 轮询最终结果。
 - 当首次查询到终态 `requestId` 时，服务会顺带触发一次 `⬅️ 返回` 复原菜单；同一个 `requestId` 只触发一次。
 - 当 `GET /api/v1/requests/{requestId}` 的 `state` 仍为 `queued` 或 `running` 时，`success` 会返回 `null`，不要把它当成最终成功。

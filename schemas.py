@@ -26,6 +26,7 @@ class WorkflowResponse(BaseModel):
 
     request_id: str = Field(..., alias="requestId")
     action: str
+    state: str
     success: bool
     status: str
     message: str

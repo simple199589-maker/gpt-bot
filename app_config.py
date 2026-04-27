@@ -30,7 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "card_code": "",
         "times": [
             "00:00",
-            "00:05",
+            "00:05"
         ],
     },
     "workflow": {
@@ -39,9 +39,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "return_delay_seconds": 1,
         "back_text": "⬅️ 返回",
         "buttons": {
-            "activate_plus": "⚡️ 激活plus母号",
-            "activate_team": "👥 激活team母号",
-            "balance": "💰 查余额",
+            "activate_plus": "⚡️ Plus直充",
+            "activate_team": "🚀 Pro 20x直充",
+            "balance": "💰 查余额/进度",
             "redeem": "🎟 兑换卡密",
         },
         "prompts": {
@@ -64,6 +64,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "次查询",
                 "请稍候",
                 "请等待",
+                "你的请求已加入队列",
+                "排队位置",
+                "预计等待",
+                "请不要重复提交",
+                "实时排队进度",
+                "你已经有一个任务在队列中",
+                "排队中",
+                "请等待完成后再提交新的请求",
             ],
             "activation_cancelled": [
                 "已取消",
@@ -78,10 +86,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "额度已退回",
                 "重新获取后再试",
                 "激活失败",
+                "队列已满",
+                "暂时无法接受新请求",
+                "自动恢复",
+                "稍后再试",
             ],
             "balance": [
                 "余额：",
                 "余额:",
+                "额度余额：",
+                "额度余额:",
+                "当前队列",
+                "你的队列任务",
+                "今日已成功：",
+                "额外直充次数：",
+                "当前状态：排队中",
+                "前方还有",
+                "预计等待：",
             ],
             "redeem_progress": [
                 "已收到请求",

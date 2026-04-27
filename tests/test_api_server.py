@@ -48,6 +48,40 @@ class WorkflowResponseTests(unittest.TestCase):
         self.assertEqual(response.status, "processing")
         self.assertTrue(response.success)
 
+    def test_build_workflow_response_exposes_running_state_for_queued(self) -> None:
+        """确保已入队响应会显式返回 queued 状态。AI by zb"""
+        job = _create_job(state="running")
+        result = WorkflowResult(
+            action="activate_team",
+            success=True,
+            status="queued",
+            message="你的请求已加入队列。",
+            raw_message="你的请求已加入队列。",
+        )
+
+        response = _build_workflow_response(job=job, result=result)
+
+        self.assertEqual(response.state, "running")
+        self.assertEqual(response.status, "queued")
+        self.assertTrue(response.success)
+
+    def test_build_workflow_response_exposes_running_state_for_already_queued(self) -> None:
+        """确保已有排队任务响应会显式返回 already_queued 状态。AI by zb"""
+        job = _create_job(state="running")
+        result = WorkflowResult(
+            action="activate_team",
+            success=True,
+            status="already_queued",
+            message="你已经有一个任务在队列中。",
+            raw_message="你已经有一个任务在队列中。",
+        )
+
+        response = _build_workflow_response(job=job, result=result)
+
+        self.assertEqual(response.state, "running")
+        self.assertEqual(response.status, "already_queued")
+        self.assertTrue(response.success)
+
     def test_build_workflow_response_exposes_completed_state_for_success(self) -> None:
         """确保最终成功响应会显式带出 completed 状态。AI by zb"""
         job = _create_job(state="completed")

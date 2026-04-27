@@ -261,6 +261,15 @@ class BotWorkflowService:
                 raw_message=raw_message,
             )
 
+        if self._is_activation_queue_full_message(raw_message):
+            return WorkflowResult(
+                action=action,
+                success=False,
+                status="queue_full",
+                message=raw_message,
+                raw_message=raw_message,
+            )
+
         if self._is_activation_failure_message(raw_message):
             return WorkflowResult(
                 action=action,
@@ -287,6 +296,10 @@ class BotWorkflowService:
             raw_message=raw_message,
         )
 
+    def _is_activation_queue_full_message(self, raw_message: str) -> bool:
+        """判断激活结果是否属于队列已满导致的明确拒绝。AI by zb"""
+        return bool(re.search(r"队列已满|暂时无法接受新请求", raw_message))
+
     def _is_activation_success_message(self, raw_message: str) -> bool:
         """判断激活结果是否属于明确成功终态。AI by zb"""
         if self._is_activation_failure_message(raw_message):
@@ -302,6 +315,9 @@ class BotWorkflowService:
 
     def _is_activation_failure_message(self, raw_message: str) -> bool:
         """判断激活结果是否属于明确失败终态。AI by zb"""
+        if self._is_activation_queue_full_message(raw_message):
+            return False
+
         if match_keywords(raw_message, list(self._result_keywords["activation_failure"])):
             return True
 
@@ -309,30 +325,36 @@ class BotWorkflowService:
 
     def _build_progress_result(self, action: str, raw_message: str) -> WorkflowResult:
         """根据处理中提示构建可立即返回给调用方的中间态结果。AI by zb"""
+        status = "processing"
+        if "你已经有一个任务在队列中" in raw_message:
+            status = "already_queued"
+        elif "你的请求已加入队列" in raw_message:
+            status = "queued"
+
         return WorkflowResult(
             action=action,
             success=True,
-            status="processing",
+            status=status,
             message=raw_message,
             raw_message=raw_message,
         )
 
     def _classify_activation_message(self, action: str, raw_message: str) -> WorkflowResult | str | None:
         """将激活流程中的任意新消息分类为中间态、成功或失败。AI by zb"""
-        if match_keywords(raw_message, self._activation_progress_keywords):
-            return "progress"
-
-        if re.search(r"当前状态[：:]", raw_message) or re.search(r"第\s*\d+\s*次查询", raw_message):
-            return "progress"
-
         if match_keywords(raw_message, self._activation_terminal_keywords):
+            return self._build_activation_result(action=action, raw_message=raw_message)
+
+        if self._is_activation_failure_message(raw_message):
             return self._build_activation_result(action=action, raw_message=raw_message)
 
         if self._is_activation_success_message(raw_message):
             return self._build_activation_result(action=action, raw_message=raw_message)
 
-        if self._is_activation_failure_message(raw_message):
-            return self._build_activation_result(action=action, raw_message=raw_message)
+        if match_keywords(raw_message, self._activation_progress_keywords):
+            return "progress"
+
+        if re.search(r"当前状态[：:]", raw_message) or re.search(r"第\s*\d+\s*次查询", raw_message):
+            return "progress"
 
         return self._build_activation_result(action=action, raw_message=raw_message)
 
@@ -375,7 +397,9 @@ class BotWorkflowService:
 
     def _extract_balance(self, raw_message: str) -> int | None:
         """尝试从余额结果文本中提取可直接使用的次数值。AI by zb"""
-        match = re.search(r"余额[：:]\s*(\d+)", raw_message)
+        match = re.search(r"额度余额[：:]\s*(\d+)\s*点", raw_message)
+        if not match:
+            match = re.search(r"余额[：:]\s*(\d+)", raw_message)
         if not match:
             return None
         return int(match.group(1))

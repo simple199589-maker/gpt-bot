@@ -184,14 +184,20 @@ class TelegramBotService:
                 raise RuntimeError("当前会话未授权，请先运行 `uv run .\\main.py login` 完成首次登录。")
 
         self._bot_entity = await self._client.get_entity(str(self._config["bot_username"]))
+        LOGGER.info(
+            "已解析 bot 实体: id=%s username=%s class=%s",
+            getattr(self._bot_entity, "id", None),
+            getattr(self._bot_entity, "username", None),
+            type(self._bot_entity).__name__,
+        )
         if not self._handler_registered:
             self._client.add_event_handler(
                 self._handle_message_event,
-                events.NewMessage(incoming=True, chats=self._bot_entity),
+                events.NewMessage(incoming=True),
             )
             self._client.add_event_handler(
                 self._handle_message_event,
-                events.MessageEdited(incoming=True, chats=self._bot_entity),
+                events.MessageEdited(incoming=True),
             )
             self._handler_registered = True
 

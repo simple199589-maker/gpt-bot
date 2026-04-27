@@ -236,14 +236,15 @@ async def _run_workflow(
 
 
 def _build_workflow_response(job, result: WorkflowResult) -> WorkflowResponse:
-    """根据动作类型构建统一响应；激活接口命中处理中消息时立即返回 processing。AI by zb"""
-    if result.action in ACTIVATION_ACTIONS and result.status == "processing":
+    """根据动作类型构建统一响应；激活接口命中处理中消息时立即返回首个业务状态。AI by zb"""
+    activation_progress_statuses = {"processing", "queued", "already_queued"}
+    if result.action in ACTIVATION_ACTIONS and result.status in activation_progress_statuses:
         return WorkflowResponse(
             request_id=job.request_id,
             action=result.action,
             state=job.state,
             success=True,
-            status="processing",
+            status=result.status,
             message=result.message,
             raw_message=result.raw_message,
             balance=result.balance,
